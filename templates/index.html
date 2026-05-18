@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能医学分诊系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, 'Microsoft YaHei', sans-serif;
+            background: #f0f4f8;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%);
+            color: white;
+            padding: 28px 32px;
+            text-align: center;
+        }
+
+        .header h1 { font-size: 1.8em; margin-bottom: 6px; }
+        .header p { font-size: 0.95em; opacity: 0.85; }
+
+        .steps {
+            display: flex;
+            justify-content: center;
+            padding: 20px 32px;
+            background: #f8fafc;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #94a3b8;
+            font-size: 0.85em;
+        }
+
+        .step.active { color: #1a73e8; font-weight: 600; }
+        .step.done { color: #16a34a; }
+
+        .step-num {
+            width: 26px; height: 26px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.85em; font-weight: 600;
+            background: #e2e8f0; color: #94a3b8;
+        }
+
+        .step.active .step-num { background: #1a73e8; color: white; }
+        .step.done .step-num { background: #16a34a; color: white; }
+
+        .step-connector {
+            width: 60px; height: 2px;
+            background: #e2e8f0;
+            margin: 0 12px;
+        }
+
+        .step-connector.done { background: #16a34a; }
+
+        .content { padding: 32px; }
+
+        #phaseInput { display: block; }
+        #phaseClarify { display: none; }
+        #phaseResult { display: none; }
+
+        .phase-title {
+            font-size: 1.2em;
+            color: #1e293b;
+            margin-bottom: 16px;
+            display: flex; align-items: center; gap: 8px;
+        }
+
+        .phase-desc {
+            color: #64748b;
+            font-size: 0.9em;
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 1em;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 130px;
+            transition: border-color 0.2s;
+            outline: none;
+        }
+
+        textarea:focus { border-color: #1a73e8; }
+
+        .btn {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 12px 28px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+
+        .btn:hover { transform: translateY(-1px); }
+
+        .btn-primary {
+            background: #1a73e8;
+            color: white;
+        }
+
+        .btn-primary:hover { box-shadow: 0 4px 12px rgba(26,115,232,0.35); }
+
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #475569;
+        }
+
+        .btn-secondary:hover { background: #cbd5e1; }
+
+        .btn-success {
+            background: #16a34a;
+            color: white;
+        }
+
+        .btn-success:hover { box-shadow: 0 4px 12px rgba(22,163,74,0.35); }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .btn-area { margin-top: 20px; text-align: center; }
+
+        .clarify-chat {
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 20px;
+            max-height: 380px;
+            overflow-y: auto;
+            margin-bottom: 16px;
+        }
+
+        .msg {
+            margin-bottom: 14px;
+            animation: fadeUp 0.3s ease;
+        }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .msg-bubble {
+            display: inline-block;
+            max-width: 85%;
+            padding: 12px 18px;
+            border-radius: 14px;
+            line-height: 1.65;
+            font-size: 0.95em;
+        }
+
+        .msg-doctor { text-align: left; }
+
+        .msg-doctor .msg-bubble {
+            background: white;
+            color: #1e293b;
+            border: 1px solid #e2e8f0;
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg-patient { text-align: right; }
+
+        .msg-patient .msg-bubble {
+            background: #1a73e8;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .msg-label {
+            font-size: 0.75em;
+            color: #94a3b8;
+            margin-bottom: 4px;
+        }
+
+        .msg-patient .msg-label { text-align: right; }
+
+        .clarify-input-area {
+            display: flex;
+            gap: 10px;
+        }
+
+        .clarify-input-area input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            font-size: 0.95em;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .clarify-input-area input:focus { border-color: #1a73e8; }
+
+        .clarify-progress {
+            text-align: center;
+            color: #94a3b8;
+            font-size: 0.82em;
+            margin-bottom: 12px;
+        }
+
+        .clarify-btns {
+            margin-top: 12px;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 30px;
+            color: #64748b;
+        }
+
+        .spinner {
+            width: 36px; height: 36px;
+            border: 3px solid #e2e8f0;
+            border-top-color: #1a73e8;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            margin: 0 auto 12px;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .urgency-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 8px 18px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 1em;
+            margin-bottom: 16px;
+        }
+
+        .urgency-1 { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+        .urgency-2 { background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; }
+        .urgency-3 { background: #fffbeb; color: #ca8a04; border: 1px solid #fef08a; }
+        .urgency-4 { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+
+        .result-section {
+            margin-bottom: 20px;
+        }
+
+        .result-section h3 {
+            font-size: 1em;
+            color: #475569;
+            margin-bottom: 8px;
+            display: flex; align-items: center; gap: 6px;
+        }
+
+        .result-section .content-text {
+            background: #f8fafc;
+            padding: 16px;
+            border-radius: 10px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            font-size: 0.93em;
+            color: #1e293b;
+        }
+
+        .dept-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin-bottom: 10px;
+        }
+
+        .dept-card h4 { color: #1a73e8; font-size: 0.95em; margin-bottom: 6px; }
+
+        .dept-card p {
+            color: #64748b;
+            font-size: 0.85em;
+            line-height: 1.5;
+        }
+
+        .dept-card .doc-list {
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .dept-card .doc-item {
+            font-size: 0.83em;
+            color: #475569;
+            padding: 3px 0;
+        }
+
+        .btn-restart {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .error-box {
+            background: #fef2f2;
+            color: #dc2626;
+            padding: 14px 18px;
+            border-radius: 10px;
+            margin-top: 16px;
+            font-size: 0.9em;
+            display: none;
+        }
+
+        .error-box.show { display: block; }
+
+        .footer {
+            text-align: center;
+            padding: 16px 32px;
+            border-top: 1px solid #e2e8f0;
+            color: #94a3b8;
+            font-size: 0.8em;
+        }
+
+        .footer a { color: #1a73e8; text-decoration: none; }
+        .footer a:hover { text-decoration: underline; }
+
+        .summary-box {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 16px;
+            font-size: 0.9em;
+            line-height: 1.6;
+            color: #166534;
+            white-space: pre-wrap;
+        }
+
+        .summary-box strong { color: #15803d; }
+
+        .streaming-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #1a73e8;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .analysis-stream {
+            background: #f8fafc;
+            padding: 16px;
+            border-radius: 10px;
+            line-height: 1.7;
+            font-size: 0.93em;
+            color: #1e293b;
+            white-space: pre-wrap;
+            min-height: 100px;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            background: #1a73e8;
+            animation: blink 0.8s infinite;
+            vertical-align: middle;
+            margin-left: 2px;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        @media (max-width: 600px) {
+            body { padding: 10px; }
+            .content { padding: 20px; }
+            .header { padding: 20px; }
+            .header h1 { font-size: 1.4em; }
+            .step-connector { width: 30px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>智能医学分诊系统</h1>
+            <p>基于知识图谱和向量检索的 AI 分诊助手</p>
+        </div>
+
+        <div class="steps" id="stepIndicator">
+            <div class="step active" id="step1">
+                <span class="step-num">1</span>
+                <span>描述症状</span>
+            </div>
+            <div class="step-connector" id="conn1"></div>
+            <div class="step" id="step2">
+                <span class="step-num">2</span>
+                <span>症状追问</span>
+            </div>
+            <div class="step-connector" id="conn2"></div>
+            <div class="step" id="step3">
+                <span class="step-num">3</span>
+                <span>分诊结果</span>
+            </div>
+        </div>
+
+        <div class="content">
+            <div id="errorBox" class="error-box"></div>
+
+            <div id="phaseInput">
+                <div class="phase-title">描述您的症状</div>
+                <div class="phase-desc">
+                    请详细描述您的不适症状，包括症状类型、持续时间、严重程度等。<br>
+                    系统将通过多轮追问帮助您理清病情，并给出专业的科室建议。
+                </div>
+                <textarea
+                    id="symptomInput"
+                    placeholder="例如：我最近三天一直头痛，主要集中在太阳穴位置，伴有轻微的恶心感，没有发烧..."
+                ></textarea>
+                <div class="btn-area">
+                    <button class="btn btn-primary" id="startBtn" onclick="startClarify()">
+                        开始分诊
+                    </button>
+                </div>
+            </div>
+
+            <div id="phaseClarify">
+                <div class="phase-title">
+                    <span>症状追问</span>
+                    <span style="font-size:0.8em;color:#94a3b8;font-weight:normal" id="clarifyProgress"></span>
+                </div>
+                <div class="phase-desc">
+                    请回答医生的问题，帮助更准确地了解您的病情。
+                </div>
+                <div class="clarify-chat" id="clarifyChat"></div>
+                <div class="clarify-input-area">
+                    <input
+                        type="text"
+                        id="clarifyInput"
+                        placeholder="请输入您的回答..."
+                        onkeydown="if(event.key==='Enter') sendAnswer()"
+                    />
+                    <button class="btn btn-primary" id="sendAnswerBtn" onclick="sendAnswer()">
+                        发送
+                    </button>
+                </div>
+                <div class="clarify-btns">
+                    <button class="btn btn-secondary" id="skipClarifyBtn" onclick="skipClarify()" style="font-size:0.85em">
+                        跳过追问，直接分诊
+                    </button>
+                </div>
+            </div>
+
+            <div id="phaseResult">
+                <div class="phase-title">
+                    <span>分诊结果</span>
+                </div>
+                <div id="summaryArea" style="display:none">
+                    <div class="phase-desc">以下是根据追问整理的病情摘要：</div>
+                    <div class="summary-box" id="summaryText"></div>
+                </div>
+                <div id="resultArea" style="display:none"></div>
+                <div class="loading" id="resultLoading">
+                    <div class="spinner"></div>
+                    <p id="loadingText">正在分析症状，请稍候...</p>
+                </div>
+                <div class="btn-restart">
+                    <button class="btn btn-secondary" onclick="resetAll()">
+                        重新开始
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            智能医学分诊系统 v1.0 &mdash; 基于 LangChain + Faiss + 知识图谱
+        </div>
+    </div>
+
+    <script>
+        let sessionId = null;
+        let initialSymptom = '';
+
+        function showError(msg) {
+            const box = document.getElementById('errorBox');
+            box.textContent = msg;
+            box.classList.add('show');
+            setTimeout(() => box.classList.remove('show'), 5000);
+        }
+
+        function updateStep(active) {
+            for (let i = 1; i <= 3; i++) {
+                const s = document.getElementById('step' + i);
+                s.classList.remove('active', 'done');
+                if (i < active) s.classList.add('done');
+                else if (i === active) s.classList.add('active');
+            }
+            if (active > 1) document.getElementById('conn1').classList.add('done');
+            else document.getElementById('conn1').classList.remove('done');
+            if (active > 2) document.getElementById('conn2').classList.add('done');
+            else document.getElementById('conn2').classList.remove('done');
+        }
+
+        function switchPhase(phase) {
+            document.getElementById('phaseInput').style.display = phase === 1 ? 'block' : 'none';
+            document.getElementById('phaseClarify').style.display = phase === 2 ? 'block' : 'none';
+            document.getElementById('phaseResult').style.display = phase === 3 ? 'block' : 'none';
+            updateStep(phase);
+        }
+
+        function addChatMessage(role, text) {
+            const chat = document.getElementById('clarifyChat');
+            const div = document.createElement('div');
+            div.className = 'msg msg-' + role;
+            const label = document.createElement('div');
+            label.className = 'msg-label';
+            label.textContent = role === 'doctor' ? '医生' : '您';
+            const bubble = document.createElement('div');
+            bubble.className = 'msg-bubble';
+            bubble.textContent = text;
+            div.appendChild(label);
+            div.appendChild(bubble);
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        async function startClarify() {
+            const input = document.getElementById('symptomInput');
+            const text = input.value.trim();
+            if (!text) { showError('请输入症状描述'); return; }
+
+            initialSymptom = text;
+            const btn = document.getElementById('startBtn');
+            btn.disabled = true;
+            btn.textContent = '启动中...';
+
+            try {
+                const res = await fetch('/api/clarify/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symptom_description: text })
+                });
+                const data = await res.json();
+
+                if (!data.success) {
+                    showError(data.error || '启动追问失败');
+                    btn.disabled = false;
+                    btn.textContent = '开始分诊';
+                    return;
+                }
+
+                sessionId = data.data.session_id;
+
+                if (data.data.continue === false) {
+                    showResultFromClarify(data.data);
+                    return;
+                }
+
+                switchPhase(2);
+                document.getElementById('clarifyChat').innerHTML = '';
+                document.getElementById('clarifyProgress').textContent = data.data.progress || '';
+                addChatMessage('patient', text);
+                addChatMessage('doctor', data.data.question);
+                document.getElementById('clarifyInput').focus();
+            } catch (err) {
+                showError('网络错误：' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '开始分诊';
+            }
+        }
+
+        async function sendAnswer() {
+            const input = document.getElementById('clarifyInput');
+            const answer = input.value.trim();
+            if (!answer || !sessionId) return;
+
+            input.value = '';
+            const btn = document.getElementById('sendAnswerBtn');
+            btn.disabled = true;
+
+            addChatMessage('patient', answer);
+
+            try {
+                const res = await fetch('/api/clarify/answer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId, answer: answer })
+                });
+                const data = await res.json();
+
+                if (!data.success) {
+                    addChatMessage('doctor', '抱歉，处理出错：' + data.error);
+                    btn.disabled = false;
+                    return;
+                }
+
+                if (data.data.continue) {
+                    addChatMessage('doctor', data.data.question);
+                    document.getElementById('clarifyProgress').textContent = data.data.progress || '';
+                } else {
+                    addChatMessage('doctor', '好的，信息已收集完毕，正在为您分析...');
+                    document.getElementById('clarifyInput').style.display = 'none';
+                    document.getElementById('sendAnswerBtn').style.display = 'none';
+                    document.getElementById('skipClarifyBtn').style.display = 'none';
+                    showResultFromClarify(data.data);
+                }
+
+                document.getElementById('clarifyInput').focus();
+            } catch (err) {
+                addChatMessage('doctor', '网络错误，请重试');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function skipClarify() {
+            if (sessionId && confirm('跳过追问将使用您最初描述的病情进行分诊，确定吗？')) {
+                doTriage(initialSymptom);
+            } else if (!sessionId) {
+                doTriage(initialSymptom);
+            }
+        }
+
+        async function showResultFromClarify(clarifyData) {
+            let symptom = initialSymptom;
+
+            if (sessionId) {
+                try {
+                    const res = await fetch('/api/clarify/confirm', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: sessionId })
+                    });
+                    const data = await res.json();
+                    if (data.success && data.data.clarified_symptom) {
+                        symptom = data.data.clarified_symptom;
+                    }
+                } catch (e) {
+                    console.warn('获取追问摘要失败，使用原始描述', e);
+                }
+            }
+
+            if (clarifyData && clarifyData.summary) {
+                document.getElementById('summaryArea').style.display = 'block';
+                document.getElementById('summaryText').textContent = clarifyData.summary;
+            }
+
+            doTriage(symptom);
+        }
+
+        async function doTriage(symptomText) {
+            switchPhase(3);
+            document.getElementById('resultLoading').style.display = 'block';
+            document.getElementById('resultArea').style.display = 'none';
+            document.getElementById('resultArea').innerHTML = '';
+
+            const loadingText = document.getElementById('loadingText');
+            let statusText = '';
+            let analysisContent = '';
+            let urgencyData = null;
+            let departmentsData = [];
+            let hospitalContext = '';
+
+            try {
+                const response = await fetch('/api/triage/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symptom_description: symptomText })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                document.getElementById('resultLoading').style.display = 'none';
+                document.getElementById('resultArea').style.display = 'block';
+
+                let urgencyBadgeHtml = '<div class="urgency-badge" id="urgencyBadge" style="display:none"></div>';
+                let analysisHtml = '<div class="result-section" id="analysisSection"><h3>分析结果</h3><div class="analysis-stream" id="analysisContent"></div></div>';
+                let departmentsHtml = '<div class="result-section" id="departmentsSection" style="display:none"><h3>推荐科室</h3><div id="departmentsList"></div></div>';
+
+                document.getElementById('resultArea').innerHTML = urgencyBadgeHtml + analysisHtml + departmentsHtml;
+
+                const analysisContentEl = document.getElementById('analysisContent');
+                analysisContentEl.innerHTML = '<span class="streaming-indicator"></span><span id="analysisText"></span><span class="cursor"></span>';
+
+                const analysisTextEl = document.getElementById('analysisText');
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+
+                                if (data.type === 'status') {
+                                    loadingText.textContent = data.content;
+                                }
+                                else if (data.type === 'chunk') {
+                                    analysisContent += data.content;
+                                    analysisTextEl.textContent = analysisContent;
+                                }
+                                else if (data.type === 'done') {
+                                    analysisTextEl.textContent = data.content;
+                                    document.querySelector('.cursor')?.remove();
+
+                                    if (data.urgency_level) {
+                                        const urgencyBadge = document.getElementById('urgencyBadge');
+                                        const urgencyNames = { 1: '危急', 2: '紧急', 3: '次紧急', 4: '非紧急' };
+                                        const urgencyIcons = { 1: '🚨', 2: '⚠️', 3: '⚡', 4: '✅' };
+                                        urgencyBadge.className = 'urgency-badge urgency-' + data.urgency_level;
+                                        urgencyBadge.style.display = 'inline-flex';
+                                        urgencyBadge.innerHTML = (urgencyIcons[data.urgency_level] || '') + ' 紧急程度：' + (data.urgency_name || urgencyNames[data.urgency_level] || '未知');
+                                    }
+
+                                    if (data.recommended_departments_detail && data.recommended_departments_detail.length > 0) {
+                                        const deptsSection = document.getElementById('departmentsSection');
+                                        const deptsList = document.getElementById('departmentsList');
+                                        deptsSection.style.display = 'block';
+
+                                        for (const dept of data.recommended_departments_detail) {
+                                            const card = document.createElement('div');
+                                            card.className = 'dept-card';
+                                            card.innerHTML = '<h4>' + escapeHtml(dept.name || '') + '</h4>';
+                                            if (dept.location) card.innerHTML += '<p>位置：' + escapeHtml(dept.location) + '</p>';
+                                            if (dept.description) card.innerHTML += '<p>' + escapeHtml(dept.description) + '</p>';
+                                            if (dept.doctors && dept.doctors.length > 0) {
+                                                card.innerHTML += '<div class="doc-list">';
+                                                for (const doc of dept.doctors) {
+                                                    card.innerHTML += '<div class="doc-item">👨‍⚕️ ' + escapeHtml(doc.name || '') + ' (' + escapeHtml(doc.title || '') + ')</div>';
+                                                }
+                                                card.innerHTML += '</div>';
+                                            }
+                                            deptsList.appendChild(card);
+                                        }
+                                    }
+                                }
+                                else if (data.type === 'error') {
+                                    document.getElementById('resultArea').innerHTML = '<div class="error-box show">错误：' + escapeHtml(data.content) + '</div>';
+                                }
+                            } catch (e) {
+                                console.warn('解析SSE数据失败:', e);
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                document.getElementById('resultLoading').style.display = 'none';
+                document.getElementById('resultArea').style.display = 'block';
+                document.getElementById('resultArea').innerHTML = '<div class="error-box show">网络错误：' + escapeHtml(err.message) + '</div>';
+            }
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function resetAll() {
+            sessionId = null;
+            initialSymptom = '';
+            document.getElementById('symptomInput').value = '';
+            document.getElementById('clarifyChat').innerHTML = '';
+            document.getElementById('clarifyInput').value = '';
+            document.getElementById('clarifyInput').style.display = '';
+            document.getElementById('sendAnswerBtn').style.display = '';
+            document.getElementById('skipClarifyBtn').style.display = '';
+            document.getElementById('resultArea').innerHTML = '';
+            document.getElementById('resultLoading').style.display = 'none';
+            document.getElementById('summaryArea').style.display = 'none';
+            document.getElementById('summaryText').textContent = '';
+            document.getElementById('loadingText').textContent = '正在分析症状，请稍候...';
+            switchPhase(1);
+        }
+    </script>
+</body>
+</html>
