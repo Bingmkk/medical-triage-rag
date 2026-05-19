@@ -362,8 +362,7 @@ class SmartReferralTool:
             return (
                 f"推荐挂号: {recommended_doctor['name']} ({recommended_doctor['title']})\n"
                 f"专业: {recommended_doctor['specialty']}\n"
-                f"状态: {recommended_doctor['availability_message']}\n"
-                f"匹配度: {recommended_doctor['specialty_match_score']*100:.0f}%"
+                f"状态: {recommended_doctor['availability_message']}"
             )
         else:
             next_time = recommended_doctor.get("next_available_time")
@@ -371,8 +370,7 @@ class SmartReferralTool:
                 return (
                     f"推荐预约: {recommended_doctor['name']} ({recommended_doctor['title']})\n"
                     f"专业: {recommended_doctor['specialty']}\n"
-                    f"下次出诊: {next_time['message']}\n"
-                    f"匹配度: {recommended_doctor['specialty_match_score']*100:.0f}%"
+                    f"下次出诊: {next_time['message']}"
                 )
             else:
                 return (

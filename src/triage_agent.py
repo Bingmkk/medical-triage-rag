@@ -8,6 +8,7 @@ from .llm_client import MedicalLLMClient
 from .rag_engine import RAGEngine
 from .knowledge_graph import MedicalKnowledgeGraph
 from .vector_store import MedicalVectorStore
+from .hospital_loader import HospitalDataLoader
 from config import TRIAGE_CONFIG
 
 
@@ -29,6 +30,7 @@ class TriageResult:
     urgency_description: str
     possible_diseases: List[str]
     recommended_department: str
+    recommended_doctors: List[str]
     advice: str
     reasoning: str
     confidence: float
@@ -42,7 +44,8 @@ class MedicalTriageAgent:
         rag_engine: Optional[RAGEngine] = None,
         knowledge_graph: Optional[MedicalKnowledgeGraph] = None,
         vector_store: Optional[MedicalVectorStore] = None,
-        llm_client: Optional[MedicalLLMClient] = None
+        llm_client: Optional[MedicalLLMClient] = None,
+        hospital_loader: Optional[HospitalDataLoader] = None
     ):
         self.llm_client = llm_client or MedicalLLMClient()
         self.rag_engine = rag_engine
@@ -51,8 +54,8 @@ class MedicalTriageAgent:
             self.rag_engine.initialize()
         self.knowledge_graph = knowledge_graph
         self.vector_store = vector_store
-        self.knowledge_graph = knowledge_graph
-        self.vector_store = vector_store
+        self.hospital_loader = hospital_loader or HospitalDataLoader()
+        self.hospital_loader.load_data()
         self.conversation_history = []
 
     def triage(self, symptom_description: str) -> TriageResult:
@@ -76,7 +79,9 @@ class MedicalTriageAgent:
 
         possible_diseases = self._extract_diseases(triage_data["analysis"])
 
-        recommended_department = self._extract_department(triage_data["analysis"])
+        recommended_department = self._extract_department(triage_data["analysis"], symptom_description)
+
+        recommended_doctors = self._extract_doctors(triage_data["analysis"], recommended_department, urgency_info["level"])
 
         advice = self._extract_advice(triage_data["analysis"])
 
@@ -90,6 +95,7 @@ class MedicalTriageAgent:
             urgency_description=self._get_urgency_description(urgency_info["level"]),
             possible_diseases=possible_diseases,
             recommended_department=recommended_department,
+            recommended_doctors=recommended_doctors,
             advice=advice,
             reasoning=reasoning,
             confidence=urgency_info.get("confidence", 0.8)
@@ -136,27 +142,142 @@ class MedicalTriageAgent:
 
         return list(set(diseases))[:5]
 
-    def _extract_department(self, analysis: str) -> str:
-        """提取建议科室"""
-        department_keywords = {
-            "心内科": ["心脏", "心血管", "胸痛", "心绞痛", "心肌"],
-            "神经科": ["头痛", "头晕", "中风", "脑", "神经"],
-            "消化内科": ["腹痛", "腹泻", "恶心", "呕吐", "胃", "肠"],
-            "呼吸科": ["咳嗽", "发热", "呼吸困难", "肺炎", "支气管"],
-            "内分泌科": ["糖尿病", "甲状腺", "肥胖", "代谢"],
-            "急诊科": ["危急", "紧急", "立即"],
-            "骨科": ["骨折", "关节", "骨", "腰痛"],
-            "皮肤科": ["皮疹", "皮肤", "过敏"]
-        }
+    def _extract_department(self, analysis: str, symptom_description: str = "") -> str:
+        """提取建议科室（与推荐引擎对齐，保证名称存在于本院数据）"""
+        urgency_info = self._parse_urgency(analysis) if analysis else {"level": 4}
+        recommended = self.hospital_loader.recommend_departments(
+            symptom_text=symptom_description,
+            analysis=analysis,
+            urgency_level=urgency_info.get("level", 4),
+            limit=1,
+        )
+        if recommended:
+            return recommended[0]["name"]
+        if self._is_child(symptom_description):
+            return self._get_pediatric_department()
+        return "消化内科"
+    
+    def _is_child(self, text: str) -> bool:
+        """判断是否是儿童（14岁以下）"""
+        child_keywords = ["孩子", "小孩", "儿童", "宝宝", "婴儿", "幼儿", "小儿", "小朋友", "女童", "男童"]
+        
+        for keyword in child_keywords:
+            if keyword in text:
+                return True
+        
+        age_pattern = r'(\d+)\s*(岁|周岁|岁半|个月)'
+        match = re.search(age_pattern, text)
+        if match:
+            age = int(match.group(1))
+            unit = match.group(2)
+            if unit == "个月":
+                return age <= 168
+            return age < 14
+        
+        return False
+    
+    def _get_pediatric_department(self) -> str:
+        """获取儿科科室名称"""
+        dept_info = self.hospital_loader.get_department_info("儿科普通门诊")
+        if dept_info:
+            return "儿科普通门诊"
+        
+        dept_info = self.hospital_loader.get_department_info("儿科")
+        if dept_info:
+            return "儿科"
+        
+        return "儿科普通门诊"
 
-        analysis_lower = analysis.lower()
-
-        for dept, keywords in department_keywords.items():
-            for keyword in keywords:
-                if keyword in analysis_lower:
-                    return dept
-
-        return "内科（普通门诊）"
+    def _extract_doctors(self, analysis: str, department_name: str = "", urgency_level: int = 4) -> List[str]:
+        """提取推荐医生（根据紧急程度差异化推荐）"""
+        import re
+        from datetime import datetime
+        
+        current_time = datetime.now()
+        current_hour = current_time.hour
+        current_weekday = current_time.weekday()
+        
+        is_work_hours = 8 <= current_hour < 17 and current_weekday < 5
+        
+        if urgency_level <= 2:
+            emergency_info = self.hospital_loader.get_department_info("急诊科")
+            if emergency_info and emergency_info.get("doctors"):
+                return [doc["name"] for doc in emergency_info["doctors"][:3]]
+        
+        available_doctors = []
+        
+        if department_name:
+            dept_info = self.hospital_loader.get_department_info(department_name)
+            if dept_info and dept_info.get("doctors"):
+                for doctor in dept_info["doctors"]:
+                    schedule = doctor.get("schedule", "")
+                    if self._is_doctor_available_now(schedule, current_time):
+                        available_doctors.append(doctor["name"])
+                    elif self._is_doctor_available_soon(schedule, current_time):
+                        available_doctors.append(doctor["name"])
+        
+        if urgency_level == 3 and available_doctors:
+            emergency_info = self.hospital_loader.get_department_info("急诊科")
+            if emergency_info and emergency_info.get("doctors"):
+                emergency_doctors = [doc["name"] for doc in emergency_info["doctors"][:2]]
+                return list(dict.fromkeys(available_doctors[:2] + emergency_doctors))
+        
+        if available_doctors:
+            return list(dict.fromkeys(available_doctors[:3]))
+        
+        if urgency_level == 3:
+            emergency_info = self.hospital_loader.get_department_info("急诊科")
+            if emergency_info and emergency_info.get("doctors"):
+                return [doc["name"] for doc in emergency_info["doctors"][:3]]
+        
+        if department_name:
+            dept_info = self.hospital_loader.get_department_info(department_name)
+            if dept_info and dept_info.get("doctors"):
+                return [doc["name"] for doc in dept_info["doctors"][:3]]
+        
+        return []
+    
+    def _is_doctor_available_now(self, schedule: str, current_time) -> bool:
+        """判断医生当前是否出诊"""
+        current_weekday = current_time.weekday()
+        current_hour = current_time.hour
+        
+        if "全天" in schedule or "24小时" in schedule:
+            if 8 <= current_hour < 17:
+                return True
+        elif "上午" in schedule:
+            if 8 <= current_hour < 12:
+                return True
+        elif "下午" in schedule:
+            if 13 <= current_hour < 17:
+                return True
+        
+        weekday_map = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6}
+        for day_char, day_num in weekday_map.items():
+            if day_char in schedule and current_weekday == day_num:
+                if "上午" in schedule:
+                    return 8 <= current_hour < 12
+                elif "下午" in schedule:
+                    return 13 <= current_hour < 17
+                else:
+                    return 8 <= current_hour < 17
+        
+        return False
+    
+    def _is_doctor_available_soon(self, schedule: str, current_time) -> bool:
+        """判断医生最近是否有排班"""
+        current_weekday = current_time.weekday()
+        current_hour = current_time.hour
+        
+        weekday_map = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6}
+        
+        for day_char, day_num in weekday_map.items():
+            if day_char in schedule:
+                days_ahead = (day_num - current_weekday) % 7
+                if days_ahead <= 2:
+                    return True
+        
+        return False
 
     def _extract_advice(self, analysis: str) -> str:
         """提取建议"""
@@ -204,15 +325,17 @@ class MedicalTriageAgent:
 
     def _format_triage_result(self, result: TriageResult) -> str:
         """格式化分诊结果"""
+        doctors_line = f"\n推荐医生：{', '.join(result.recommended_doctors)}" if result.recommended_doctors else ""
+        
         return f"""
 【医学分诊结果】
 
 紧急程度：{result.urgency_name} ({result.urgency_level.value}/4)
-{description}
+{result.urgency_description}
 
 可能疾病：{', '.join(result.possible_diseases) if result.possible_diseases else '待进一步检查确定'}
 
-建议科室：{result.recommended_department}
+建议科室：{result.recommended_department}{doctors_line}
 
 处置建议：{result.advice}
 

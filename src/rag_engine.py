@@ -46,8 +46,12 @@ class RAGEngine:
 
         try:
             print("\n[1/4] 加载混合检索系统...")
-            self.searcher = create_hybrid_search()
-            print("[V] 混合检索系统加载成功")
+            try:
+                self.searcher = create_hybrid_search()
+                print("[V] 混合检索系统加载成功")
+            except Exception as search_error:
+                print(f"[!] 混合检索系统加载失败，降级运行: {search_error}")
+                self.searcher = None
 
             if load_knowledge_graph:
                 print("\n[2/4] 加载知识图谱...")
@@ -103,21 +107,12 @@ class RAGEngine:
                 return context
 
         if self.hospital_loader:
-            departments = self.hospital_loader.get_department_by_symptom(symptom_or_disease)
-            if departments:
-                context_parts = []
-                hospital_info = self.hospital_loader.get_all_departments()
-                context_parts.append(f"{hospital_info['hospital_info']['name']}")
-                context_parts.append(f"急诊电话: {hospital_info['hospital_info']['emergency_phone']}")
-                for i, dept in enumerate(departments[:3], 1):
-                    context_parts.append(f"{i}. {dept['name']}")
-                    if dept.get('location'):
-                        context_parts.append(f"   位置: {dept['location']}")
-                    if dept.get('doctors'):
-                        doc_names = [d['name'] for d in dept['doctors'][:3]]
-                        if doc_names:
-                            context_parts.append(f"   医生: {', '.join(doc_names)}")
-                return "\n".join(context_parts)
+            hospital_info = self.hospital_loader.get_all_departments()
+            return "\n".join([
+                hospital_info["hospital_info"]["name"],
+                f"急诊电话: {hospital_info['hospital_info']['emergency_phone']}",
+                "（正式科室推荐将在分诊分析生成后，依据「科室：」字段与急诊分级确定）",
+            ])
 
         return ""
 
@@ -303,13 +298,24 @@ class RAGEngine:
             return []
         return self.searcher.search(query, top_k=k, use_rerank=True)
 
-    def get_recommended_departments(self, symptom: str) -> List[Dict[str, Any]]:
-        """获取推荐科室（通过RAG检索）"""
+    def get_recommended_departments(
+        self,
+        symptom: str,
+        analysis: str = "",
+        urgency_level: int = 4,
+    ) -> List[Dict[str, Any]]:
+        """获取推荐科室（规则评分优先，向量检索补充）"""
+        if self.hospital_loader and analysis:
+            return self.hospital_loader.recommend_departments(
+                symptom_text=symptom,
+                analysis=analysis,
+                urgency_level=urgency_level,
+                limit=5,
+            )
+
         if self.hospital_rag:
             results = self.hospital_rag.search(symptom, top_k=5)
             return [r['department'] for r in results]
-        elif self.hospital_loader:
-            return self.hospital_loader.get_department_by_symptom(symptom)
         return []
 
     def create_qa_chain(self, prompt_template: Optional[str] = None) -> RetrievalQA:

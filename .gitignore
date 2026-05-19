@@ -1,4 +1,3 @@
-# 依赖目录
 venv/
 .env
 __pycache__/
@@ -7,34 +6,32 @@ __pycache__/
 *.pyd
 .Python
 
-# 数据文件（大文件不上传）
 data/*.index
 data/*.graphml
 data/*.json
 
-# IDE配置
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# 日志和输出
 *.log
 output/
 *.out
 
-# 操作系统
 .DS_Store
 Thumbs.db
 
-# 模型文件
 models/
 *.bin
 *.pt
 *.pth
 
-# 构建产物
 dist/
 build/
 *.egg-info/
+
+environment.md
+test_api.py
+test_*.py

@@ -312,6 +312,99 @@
             padding: 3px 0;
         }
 
+        .dept-card .doc-specialty {
+            font-size: 0.80em;
+            color: #94a3b8;
+            padding-left: 12px;
+            margin-top: 2px;
+            line-height: 1.4;
+        }
+
+        .time-info {
+            background: #f0f9ff;
+            border: 1px solid #e0f2fe;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-size: 0.85em;
+            color: #0369a1;
+        }
+
+        .referral-section {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px dashed #e2e8f0;
+        }
+
+        .available-now {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            padding: 8px 10px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+        }
+
+        .recommended-doctor {
+            background: #fffbeb;
+            border: 1px solid #fde68a;
+            padding: 8px 10px;
+            border-radius: 6px;
+        }
+
+        .doc-item.available {
+            color: #166534;
+            margin: 6px 0;
+        }
+
+        .doc-item.recommended {
+            color: #92400e;
+            margin: 6px 0;
+        }
+
+        .avail-tag {
+            background: #dcfce7;
+            color: #166534;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.85em;
+        }
+
+        .match-tag {
+            background: #dbeafe;
+            color: #1e40af;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.85em;
+        }
+
+        .next-avail {
+            color: #b45309;
+            font-size: 0.85em;
+        }
+
+        .referral-message {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 16px 20px;
+            border-radius: 10px;
+            margin-top: 16px;
+        }
+
+        .referral-message h4 {
+            color: white;
+            margin-bottom: 8px;
+        }
+
+        .referral-message pre {
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 0.85em;
+            line-height: 1.6;
+            margin: 0;
+            white-space: pre-wrap;
+        }
+
         .btn-restart {
             margin-top: 20px;
             text-align: center;
@@ -649,7 +742,9 @@
         async function showResultFromClarify(clarifyData) {
             let symptom = initialSymptom;
 
-            if (sessionId) {
+            if (clarifyData && clarifyData.summary) {
+                symptom = clarifyData.summary;
+            } else if (sessionId) {
                 try {
                     const res = await fetch('/api/clarify/confirm', {
                         method: 'POST',
@@ -747,20 +842,91 @@
                                         const deptsList = document.getElementById('departmentsList');
                                         deptsSection.style.display = 'block';
 
+                                        let headerHtml = '<h3>🏥 推荐科室与医生</h3>';
+                                        if (data.smart_referral && data.smart_referral.current_time) {
+                                            const time = data.smart_referral.current_time;
+                                            headerHtml += '<div class="time-info">📅 当前时间：' + escapeHtml(time.weekday || '') + ' ' + escapeHtml(time.datetime || '') + '</div>';
+                                        }
+                                        deptsList.innerHTML = headerHtml;
+
                                         for (const dept of data.recommended_departments_detail) {
                                             const card = document.createElement('div');
                                             card.className = 'dept-card';
-                                            card.innerHTML = '<h4>' + escapeHtml(dept.name || '') + '</h4>';
-                                            if (dept.location) card.innerHTML += '<p>位置：' + escapeHtml(dept.location) + '</p>';
-                                            if (dept.description) card.innerHTML += '<p>' + escapeHtml(dept.description) + '</p>';
-                                            if (dept.doctors && dept.doctors.length > 0) {
-                                                card.innerHTML += '<div class="doc-list">';
-                                                for (const doc of dept.doctors) {
-                                                    card.innerHTML += '<div class="doc-item">👨‍⚕️ ' + escapeHtml(doc.name || '') + ' (' + escapeHtml(doc.title || '') + ')</div>';
-                                                }
-                                                card.innerHTML += '</div>';
+
+                                            let deptHtml = '<h4>' + escapeHtml(dept.name || '');
+                                            if (dept.visit_priority === 1) deptHtml += ' <span class="avail-tag">首选</span>';
+                                            else if (dept.visit_priority > 1) deptHtml += ' <span class="avail-tag">备选</span>';
+                                            deptHtml += '</h4>';
+                                            if (dept.triage_tier_name) deptHtml += '<p class="match-score">急诊分级：' + escapeHtml(dept.triage_tier_name) + '</p>';
+                                            if (dept.recommend_reason) deptHtml += '<p class="match-reason">💡 ' + escapeHtml(dept.recommend_reason) + '</p>';
+                                            if (dept.visit_guidance && dept.visit_priority === 1) deptHtml += '<p class="match-reason">📋 ' + escapeHtml(dept.visit_guidance) + '</p>';
+                                            if (dept.location) deptHtml += '<p>📍 位置：' + escapeHtml(dept.location) + '</p>';
+                                            if (dept.room_number) deptHtml += '<p>🚪 诊室：' + escapeHtml(dept.room_number) + '</p>';
+                                            if (dept.description) deptHtml += '<p>' + escapeHtml(dept.description) + '</p>';
+
+                                            if (dept.schedule_info) {
+                                                const schedule = dept.schedule_info;
+                                                if (schedule.weekday) deptHtml += '<p>⏰ 工作日：' + escapeHtml(schedule.weekday) + '</p>';
+                                                if (schedule.weekend) deptHtml += '<p>📅 周末：' + escapeHtml(schedule.weekend) + '</p>';
                                             }
+
+                                            if (dept.smart_referral) {
+                                                const referral = dept.smart_referral;
+
+                                                deptHtml += '<div class="referral-section">';
+
+                                                if (referral.available_doctors_now && referral.available_doctors_now.length > 0) {
+                                                    deptHtml += '<div class="available-now"><strong>🟢 当前可挂号医生：</strong>';
+                                                    for (const doc of referral.available_doctors_now) {
+                                                        deptHtml += '<div class="doc-item available">';
+                                                        deptHtml += '• ' + escapeHtml(doc.name || '') + ' (' + escapeHtml(doc.title || '') + ')';
+                                                        if (doc.availability_message) {
+                                                            deptHtml += ' <span class="avail-tag">' + escapeHtml(doc.availability_message) + '</span>';
+                                                        }
+                                                        if (doc.specialty) {
+                                                            deptHtml += '<br><span class="doc-specialty">  专业：' + escapeHtml(doc.specialty) + '</span>';
+                                                        }
+                                                        deptHtml += '</div>';
+                                                    }
+                                                    deptHtml += '</div>';
+                                                }
+
+                                                if (referral.recommended_doctor && !referral.recommended_doctor.is_available_now) {
+                                                    const recDoc = referral.recommended_doctor;
+                                                    deptHtml += '<div class="recommended-doctor"><strong>⭐ 推荐医生：</strong>';
+                                                    deptHtml += '<div class="doc-item recommended">';
+                                                    deptHtml += '• ' + escapeHtml(recDoc.name || '') + ' (' + escapeHtml(recDoc.title || '') + ')';
+                                                    if (recDoc.next_available_time) {
+                                                        deptHtml += '<br><span class="next-avail">  下次出诊：' + escapeHtml(recDoc.next_available_time.message || '') + '</span>';
+                                                    }
+                                                    if (recDoc.specialty) {
+                                                        deptHtml += '<br><span class="doc-specialty">  专业：' + escapeHtml(recDoc.specialty) + '</span>';
+                                                    }
+                                                    deptHtml += '</div></div>';
+                                                }
+
+                                                deptHtml += '</div>';
+                                            }
+
+                                            if (dept.doctors && dept.doctors.length > 0 && !dept.smart_referral) {
+                                                deptHtml += '<div class="doc-list"><strong>👨‍⚕️ 全部医生：</strong>';
+                                                for (const doc of dept.doctors) {
+                                                    deptHtml += '<div class="doc-item">• ' + escapeHtml(doc.name || '') + ' (' + escapeHtml(doc.title || '') + ')';
+                                                    if (doc.specialty) deptHtml += '<br><span class="doc-specialty">  专业：' + escapeHtml(doc.specialty) + ' | 出诊：' + escapeHtml(doc.schedule || '请咨询') + '</span>';
+                                                    deptHtml += '</div>';
+                                                }
+                                                deptHtml += '</div>';
+                                            }
+
+                                            card.innerHTML = deptHtml;
                                             deptsList.appendChild(card);
+                                        }
+
+                                        if (data.smart_referral && data.smart_referral.referral_message) {
+                                            const referralCard = document.createElement('div');
+                                            referralCard.className = 'referral-message';
+                                            referralCard.innerHTML = '<h4>💡 智能分流建议</h4><pre>' + escapeHtml(data.smart_referral.referral_message) + '</pre>';
+                                            deptsList.appendChild(referralCard);
                                         }
                                     }
                                 }

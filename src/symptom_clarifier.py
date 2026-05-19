@@ -9,6 +9,7 @@ os.environ["USE_TORCH"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
+import re
 from typing import List, Dict, Any, Optional, Set
 from pathlib import Path
 from .llm_client import MedicalLLMClient
@@ -33,6 +34,8 @@ class SymptomClarifier:
         self.asked_questions: Set[str] = set()  # 记录已问过的问题文本
         self.key_symptoms: List[str] = []
         self.is_emergency = False
+        self.clarified_summary: str = ""
+        self.known_facts: Dict[str, str] = {}
         self.emergency_keywords = [
             '昏迷', '晕倒', '撞人', '事故', '车祸', '出血', '呼吸困难', 
             '胸痛', '心跳加速', '抽搐', '高热', '意识模糊', '休克',
@@ -54,7 +57,8 @@ class SymptomClarifier:
             '呼吸困难': ['呼吸', '喘气', '胸闷', '气短'],
             '外伤': ['受伤', '流血', '骨折', '撞伤'],
             '意识问题': ['昏迷', '晕倒', '意识', '清醒'],
-            '事故': ['撞人', '车祸', '事故', '摔倒']
+            '事故': ['撞人', '车祸', '事故', '摔倒'],
+            '风湿关节': ['风湿', '关节痛', '关节炎', '类风湿', '痛风', '腰腿痛'],
         }
         
         detected = []
@@ -84,6 +88,155 @@ class SymptomClarifier:
             if len(common_words) >= 0.6 * len(new_q_words) and len(common_words) >= 2:
                 return True
         
+        return False
+
+    def _get_all_patient_text(self) -> str:
+        """合并患者全部表述（初始描述 + 各轮回答）"""
+        parts = [self.symptom_context.get("initial_symptom", "")]
+        for msg in self.conversation_history:
+            if msg["role"] == "patient":
+                parts.append(msg["content"])
+        return " ".join(p for p in parts if p).strip()
+
+    def _extract_known_facts(self) -> Dict[str, str]:
+        """从患者已说的话中提取「已知信息」，用于禁止重复追问"""
+        text = self._get_all_patient_text()
+        if not text:
+            return {}
+
+        facts: Dict[str, str] = {}
+
+        duration_patterns = [
+            r"\d+\s*[天日周月年]",
+            r"[一二三四五六七八九十百千两]+[天日周月年]",
+            r"最近|今天|昨天|今早|昨晚|刚才|一直|多年|很久|刚开始",
+        ]
+        if any(re.search(p, text) for p in duration_patterns):
+            facts["duration"] = "发病/持续时间"
+
+        severity_words = [
+            "厉害", "很严重", "特别疼", "疼得厉害", "难受", "加重", "更明显",
+            "受不了", "剧烈", "严重", "厉害多了",
+        ]
+        if any(w in text for w in severity_words):
+            facts["severity"] = "严重程度或疼痛程度"
+
+        trigger_words = [
+            "下雨", "雨天", "潮湿", "阴雨天", "天冷", "受凉", "风吹",
+            "劳累", "运动后", "活动后", "走路", "久坐", "弯腰",
+            "吃了", "喝了", "熬夜", "情绪激动", "因为",
+        ]
+        matched_triggers = [w for w in trigger_words if w in text]
+        if matched_triggers:
+            facts["aggravating_factors"] = (
+                "诱发或加重因素（如：" + "、".join(matched_triggers[:4]) + "）"
+            )
+
+        relieve_words = ["休息后", "吃药后", "热敷", "缓解", "好转", "减轻", "舒服些"]
+        if any(w in text for w in relieve_words):
+            facts["relieving_factors"] = "缓解因素"
+
+        location_words = [
+            "左边", "右边", "两侧", "单侧", "双侧", "膝盖", "手腕", "手指",
+            "肩膀", "腰", "背", "颈", "头", "胸", "腹", "脚", "踝", "肘",
+        ]
+        if any(w in text for w in location_words):
+            facts["location"] = "不适部位"
+
+        associated_words = [
+            "发烧", "发热", "恶心", "呕吐", "麻木", "肿胀", "僵硬",
+            "无力", "皮疹", "瘙痒", "出血",
+        ]
+        if any(w in text for w in associated_words):
+            facts["associated_symptoms"] = "部分伴随症状"
+
+        if re.search(r"风湿|关节|类风湿|痛风", text):
+            facts["disease_context"] = "风湿/关节相关描述"
+
+        return facts
+
+    def _sync_asked_topics_from_facts(self) -> None:
+        """患者已说清的信息，标记为已覆盖话题"""
+        self.known_facts = self._extract_known_facts()
+        topic_map = {
+            "duration": "duration",
+            "severity": "severity",
+            "aggravating_factors": "aggravating_factors",
+            "relieving_factors": "relieving_factors",
+            "location": "location",
+            "associated_symptoms": "associated_symptoms",
+        }
+        for fact_key, topic in topic_map.items():
+            if fact_key in self.known_facts:
+                self.asked_topics.add(topic)
+
+    def _format_known_facts_block(self) -> str:
+        if not self.known_facts:
+            return "（暂无，需从患者描述中获取）"
+        return "\n".join(f"- {v}" for v in self.known_facts.values())
+
+    def _format_forbidden_examples(self) -> str:
+        examples = []
+        if "aggravating_factors" in self.known_facts or "severity" in self.known_facts:
+            examples.append(
+                '- 患者已说明「下雨/潮湿等会让症状加重或更厉害」时，禁止再问：'
+                '「什么时候更严重」「什么情况下会加重」「疼得厉害吗」'
+            )
+        if "duration" in self.known_facts:
+            examples.append(
+                '- 患者已说明时间/多久时，禁止再问：「持续多久」「什么时候开始的」'
+            )
+        if "location" in self.known_facts:
+            examples.append('- 患者已说明部位时，禁止再问：「哪里不舒服」「哪个部位」')
+        if not examples:
+            examples.append("- 不要换种说法重复问患者已经回答过的内容")
+        return "\n".join(examples)
+
+    def _extract_topic_from_question(self, question: str) -> str:
+        """从问题中提取主题，避免重复"""
+        question_lower = question.lower()
+
+        if ("什么时候" in question or "何时" in question or "什么情况下" in question) and (
+            "严重" in question or "加重" in question or "厉害" in question or "更明显" in question
+        ):
+            return "aggravating_factors"
+        if "多久" in question or "时间" in question or "持续" in question or "开始" in question:
+            return "duration"
+        elif "部位" in question or "位置" in question or "哪里" in question or "哪儿" in question:
+            return "location"
+        elif "伴随" in question or "其他" in question or "还有" in question or "同时" in question:
+            return "associated_symptoms"
+        elif "严重" in question or "程度" in question or "厉害" in question or "多疼" in question:
+            return "severity"
+        elif (
+            "加重" in question or "诱发" in question or "缓解" in question
+            or "什么情况" in question or "什么原因" in question
+        ):
+            return "aggravating_factors"
+        elif "原因" in question or "为什么" in question:
+            return "cause"
+        elif "处理" in question or "做什么" in question or "用药" in question:
+            return "action_taken"
+        elif "怎么" in question or "如何" in question or "什么样" in question:
+            return "how"
+
+        return f"topic_{self.current_round}"
+
+    def _is_redundant_with_known_facts(self, question: str) -> bool:
+        """问题是否在追问患者已经说过的信息"""
+        topic = self._extract_topic_from_question(question)
+        if topic in self.asked_topics and topic != f"topic_{self.current_round}":
+            return True
+        if topic in self.known_facts:
+            return True
+        if topic == "severity" and "aggravating_factors" in self.known_facts:
+            return True
+        if topic == "aggravating_factors" and (
+            "aggravating_factors" in self.known_facts or "severity" in self.known_facts
+        ):
+            return True
+        if topic == "cause" and "aggravating_factors" in self.known_facts:
+            return True
         return False
 
     def start_clarification(self, initial_symptom: str) -> Dict[str, Any]:
@@ -135,29 +288,10 @@ class SymptomClarifier:
         """
         return self._finish_clarification(reason)
 
-    def _extract_topic_from_question(self, question: str) -> str:
-        """从问题中提取主题，避免重复"""
-        question_lower = question.lower()
-
-        if "多久" in question or "时间" in question or "持续" in question or "开始" in question:
-            return "duration"
-        elif "部位" in question or "位置" in question or "哪里" in question:
-            return "location"
-        elif "怎么" in question or "如何" in question or "情况" in question:
-            return "how"
-        elif "伴随" in question or "其他" in question or "还有" in question:
-            return "associated_symptoms"
-        elif "严重" in question or "程度" in question or "厉害" in question:
-            return "severity"
-        elif "原因" in question or "为什么" in question:
-            return "cause"
-        elif "处理" in question or "做什么" in question:
-            return "action_taken"
-
-        return f"topic_{self.current_round}"
-
     def _generate_next_question(self) -> Dict[str, Any]:
         """生成下一轮追问问题 - 智能去重版"""
+        self._sync_asked_topics_from_facts()
+
         context = self._build_context_for_llm()
         previous_question = self.conversation_history[-2]["content"] if len(self.conversation_history) > 1 else ""
         previous_answer = self.conversation_history[-1]["content"]
@@ -168,6 +302,20 @@ class SymptomClarifier:
             self.asked_questions.add(previous_question)
 
         symptom_type = ", ".join(self.key_symptoms) if self.key_symptoms else "未明确"
+        known_block = self._format_known_facts_block()
+        forbidden_block = self._format_forbidden_examples()
+        asked_topics_list = ", ".join(sorted(self.asked_topics)) if self.asked_topics else "无"
+
+        listening_rules = f"""
+【倾听原则 — 必须遵守】
+1. 先完整阅读患者已说的每一句话，把已知信息当作「已回答」，不得换说法再问一遍。
+2. 患者已提供的信息（禁止重复追问）：
+{known_block}
+3. 禁止重复追问示例：
+{forbidden_block}
+4. 只问「上面列表里还没有」且对分诊有帮助的信息；若关键信息已够，输出「[可以了]」。
+5. 已问过或已覆盖的话题类型（禁止再问同类）：{asked_topics_list}
+"""
 
         if self.current_round == 0:
             prompt = f"""你是一位专业的急诊医生，正在快速了解患者情况。
@@ -176,25 +324,18 @@ class SymptomClarifier:
 
 分析：{'【紧急情况】' if self.is_emergency else '【常规问诊】'}
 已识别症状类型：{symptom_type}
+{listening_rules}
 
-请根据以下原则提出最重要的第一个问题：
-1. 如果是紧急情况，优先确认时间、地点、当前状态
-2. 如果是常规症状，先问持续时间或发生时间
-3. 问题要直接、明确，帮助快速了解病情
-4. 避免假设，只基于患者已说的内容提问
-5. 问题要与患者描述直接相关
+请提出第一个问题：
+- 紧急情况：优先问尚未说明的时间、地点、当前状态（仅问缺失项）
+- 常规症状：不要机械地问「持续多久」；若患者已说明时间、加重因素、严重程度，改问其他缺失信息，例如：
+  · 具体哪些关节/部位不适
+  · 是否肿胀、晨僵、活动受限
+  · 是否用药、既往诊断
+- 风湿/关节痛且已提到下雨、潮湿、天冷等加重：禁止再问「什么时候更严重」「什么情况下加重」
 
-示例（紧急情况）：
-- "您说人昏迷了，这种情况发生多久了？"
-- "您在哪里？需要立即拨打120吗？"
-
-示例（常规症状）：
-- "您说头痛，这种情况大概持续多久了？"
-- "您说胃痛，是今天才开始的吗？"
-
-请直接输出1个问题，不要其他内容。"""
+请直接输出1个问题，或信息已足够时输出「[可以了]」。"""
         else:
-            asked_topics_list = ", ".join(self.asked_topics) if self.asked_topics else "无"
             prompt = f"""你是一位专业的急诊医生，正在快速了解患者情况。
 
 === 对话历史 ===
@@ -206,50 +347,46 @@ class SymptomClarifier:
 
 分析：{'【紧急情况】' if self.is_emergency else '【常规问诊】'}
 已识别症状类型：{symptom_type}
-已问过的话题类型：{asked_topics_list}
+{listening_rules}
 
-请根据以下原则决定下一步：
-1. 如果是紧急情况，优先问关键信息：时间、地点、当前状态、已采取措施
-2. 如果患者回答与之前话题完全无关（如从蚊子叮咬突然转到撞人），立即跟进新话题
-3. 如果信息足够明确，可以输出"[可以了]"直接结束追问
-4. 问题必须与患者当前描述高度相关
-5. 绝对不要问与之前重复或相似的问题！
+请决定下一步：
+1. 紧急情况：只追问尚未说明的关键信息（时间、地点、状态、已采取措施）
+2. 患者补充了新话题时，跟进新信息，但仍不要重复问已知内容
+3. 信息足够分诊时，输出「[可以了]」
+4. 禁止用不同措辞重复同一信息（例如患者已说下雨后风湿加重，不要再问何时更严重）
 
-紧急情况优先询问顺序：
-1. 发生时间（多久了？什么时候发生的？）
-2. 当前位置和状况（人现在怎么样？在哪里？）
-3. 已采取措施（有没有打120？做了什么急救？）
-4. 具体情况（怎么发生的？什么原因？）
+仍可追问的维度（仅当患者尚未说明时）：
+- 具体部位 / 是否对称
+- 伴随症状（发热、肿胀、麻木等）
+- 是否用药及效果
+- 既往类似发作
 
-常规症状询问顺序：
-1. 持续时间（多久了？）
-2. 严重程度（疼得厉害吗？）
-3. 伴随症状（还有其他不舒服吗？）
-4. 诱发/缓解因素（什么情况下加重/好转？）
+请直接输出一个问题，或「[可以了]」。"""
 
-请直接输出问题或"[可以了]"，不要其他内容。"""
-
-        # 最多尝试3次生成不重复的问题
-        max_attempts = 3
+        max_attempts = 4
+        response = ""
         for attempt in range(max_attempts):
-            response = self.llm_client.generate(prompt)
-            response = response.strip()
+            response = self.llm_client.generate(prompt).strip()
 
-            if "[可以了]" in response or "[结束]" in response or "可以了" in response:
+            if "[可以了]" in response or "[结束]" in response:
                 return self._finish_clarification("关键信息已收集")
 
-            # 检查是否重复
+            redundant_reason = None
             if self._is_duplicate_question(response):
+                redundant_reason = "与之前的问题措辞重复"
+            elif self._is_redundant_with_known_facts(response):
+                topic = self._extract_topic_from_question(response)
+                redundant_reason = f"患者已说明相关内容（话题：{topic}）"
+
+            if redundant_reason:
                 if attempt < max_attempts - 1:
-                    # 添加提示让LLM避免重复
-                    prompt += f"\n\n注意：你刚才问的问题与之前重复了，请换一个不同的问题！"
+                    prompt += (
+                        f"\n\n【系统提示】你刚才的问题不合格：{redundant_reason}。"
+                        f"请改问患者尚未说明的其他维度，或输出「[可以了]」。"
+                    )
                     continue
-                else:
-                    # 多次尝试后仍然重复，直接结束追问
-                    return self._finish_clarification("关键信息已收集")
-            else:
-                # 问题不重复，接受这个问题
-                break
+                return self._finish_clarification("关键信息已收集")
+            break
 
         self.conversation_history.append({
             "role": "assistant",
@@ -287,6 +424,7 @@ class SymptomClarifier:
 请用简洁的语言整理，只写患者明确说过的内容。"""
 
         summary = self.llm_client.generate(summary_prompt)
+        self.clarified_summary = summary.strip()
 
         return {
             "continue": False,
@@ -318,9 +456,11 @@ class SymptomClarifier:
         return "\n".join(lines)
 
     def get_clarified_symptom(self) -> str:
-        """获取梳理后的完整症状描述"""
+        """获取梳理后的症状描述（优先返回症状摘要，供分诊与科室推荐使用）"""
+        if self.clarified_summary:
+            return self.clarified_summary
         if not self.conversation_history:
-            return ""
+            return self.symptom_context.get("initial_symptom", "")
 
         lines = [f"【完整对话记录】\n患者描述：{self.symptom_context.get('initial_symptom', '')}"]
 

@@ -54,17 +54,26 @@ class HospitalRAG:
 
             print("处理医院科室数据...")
             self.department_info = []
-            
+            symptom_by_dept = self._build_symptom_index(
+                hospital_data.get('specialty_mapping', {})
+            )
+
             for dept_category in hospital_data.get('departments', []):
                 for main_dept in dept_category.get('sub_departments', []):
                     if 'sub_specialties' in main_dept:
                         for sub_dept in main_dept['sub_specialties']:
                             dept_info = self._process_department(sub_dept)
                             if dept_info:
+                                dept_info['symptoms'] = symptom_by_dept.get(
+                                    sub_dept.get('id', ''), []
+                                )
                                 self.department_info.append(dept_info)
                     else:
                         dept_info = self._process_department(main_dept)
                         if dept_info:
+                            dept_info['symptoms'] = symptom_by_dept.get(
+                                main_dept.get('id', ''), []
+                            )
                             self.department_info.append(dept_info)
 
             print(f"[V] 共处理 {len(self.department_info)} 个科室")
@@ -77,6 +86,16 @@ class HospitalRAG:
         except Exception as e:
             print(f"[X] 加载医院数据失败: {e}")
             return False
+
+    def _build_symptom_index(self, specialty_mapping: Dict) -> Dict[str, List[str]]:
+        """根据 specialty_mapping 反查每个科室对应的症状关键词"""
+        index: Dict[str, List[str]] = {}
+        for symptom, dept_ids in specialty_mapping.items():
+            for dept_id in dept_ids:
+                index.setdefault(dept_id, [])
+                if symptom not in index[dept_id]:
+                    index[dept_id].append(symptom)
+        return index
 
     def _process_department(self, dept: Dict) -> Dict:
         """处理单个科室信息"""
@@ -118,6 +137,12 @@ class HospitalRAG:
         parts.append(dept['name'])
         if dept['description']:
             parts.append(dept['description'])
+        if dept.get('symptoms'):
+            parts.append(f"擅长症状: {', '.join(dept['symptoms'][:12])}")
+        for doctor in dept.get('doctors', [])[:4]:
+            specialty = doctor.get('specialty', '')
+            if specialty:
+                parts.append(f"诊治: {specialty}")
         if dept['location']:
             parts.append(f"位置: {dept['location']}")
         if dept['room_number']:

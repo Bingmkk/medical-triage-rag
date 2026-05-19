@@ -1,7 +1,9 @@
+# Use existing conda env: pytorch2.2.2 (torch 2.2.2 already installed there — do not pip install torch separately)
 langchain>=0.1.0
 langchain-community>=0.0.20
 langchain-core>=0.1.0
 faiss-cpu>=1.7.4
+rank-bm25>=0.2.2
 numpy>=1.24.0
 sentence-transformers>=2.2.0
 transformers>=4.30.0

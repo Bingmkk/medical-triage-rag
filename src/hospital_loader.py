@@ -217,60 +217,38 @@ class HospitalDataLoader:
 
         return kg
 
-    def get_department_by_symptom(self, symptom_name: str) -> List[Dict[str, Any]]:
-        """根据症状推荐科室"""
+    def recommend_departments(
+        self,
+        symptom_text: str,
+        analysis: str = "",
+        urgency_level: int = 4,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """根据症状、分诊分析与紧急程度推荐科室（评分排序）"""
+        from .department_recommender import DepartmentRecommender
+
         if not self.hospital_data:
             self.load_data()
+        return DepartmentRecommender(self).recommend(
+            symptom_text=symptom_text,
+            analysis=analysis,
+            urgency_level=urgency_level,
+            limit=limit,
+        )
 
-        symptom_mapping = self.hospital_data.get("specialty_mapping", {})
-        symptom_key = symptom_name.lower().replace(" ", "_")
+    def get_department_by_symptom(self, symptom_name: str) -> List[Dict[str, Any]]:
+        """根据症状推荐科室（兼容旧接口）"""
+        return self.recommend_departments(symptom_name, limit=5)
 
-        recommended_dept_ids = []
-        for key, dept_ids in symptom_mapping.items():
-            if symptom_key in key or key in symptom_key:
-                recommended_dept_ids.extend(dept_ids)
-
-        if not recommended_dept_ids:
-            for key in symptom_mapping.keys():
-                if any(word in symptom_name.lower() for word in key.split("_")):
-                    recommended_dept_ids.extend(symptom_mapping[key])
-
-        recommended_departments = []
-        for dept_category in self.hospital_data["departments"]:
-            if "sub_departments" in dept_category:
-                for sub_dept in dept_category["sub_departments"]:
-                    if f"dept_{sub_dept['id']}" in [f"dept_{did}" for did in recommended_dept_ids]:
-                        dept_info = {
-                            "name": sub_dept["name"],
-                            "description": sub_dept.get("description", ""),
-                            "category": dept_category["name"],
-                            "location": sub_dept.get("location", ""),
-                            "room_number": sub_dept.get("room_number", ""),
-                            "beds": sub_dept.get("beds", 0)
-                        }
-                        if "doctors" in sub_dept:
-                            dept_info["doctors"] = sub_dept["doctors"]
-                        if "schedule_info" in sub_dept:
-                            dept_info["schedule_info"] = sub_dept["schedule_info"]
-                        recommended_departments.append(dept_info)
-
-                    if "sub_specialties" in sub_dept:
-                        for specialty in sub_dept["sub_specialties"]:
-                            if f"dept_{specialty['id']}" in [f"dept_{did}" for did in recommended_dept_ids]:
-                                dept_info = {
-                                    "name": specialty["name"],
-                                    "description": specialty.get("description", ""),
-                                    "category": dept_category["name"],
-                                    "parent": sub_dept["name"],
-                                    "location": specialty.get("location", ""),
-                                    "room_number": specialty.get("room_number", ""),
-                                    "beds": specialty.get("beds", 0),
-                                    "doctors": specialty.get("doctors", []),
-                                    "schedule_info": specialty.get("schedule_info", {})
-                                }
-                                recommended_departments.append(dept_info)
-
-        return recommended_departments
+    def _extract_chinese_keywords(self, text: str) -> List[str]:
+        """从文本中提取中文关键词"""
+        import re
+        chinese_chars = re.findall(r'[\u4e00-\u9fa5]+', text.lower())
+        keywords = []
+        for chars in chinese_chars:
+            if len(chars) >= 2:
+                keywords.append(chars)
+        return keywords
 
     def get_all_departments(self) -> Dict[str, Any]:
         """获取所有科室信息"""
@@ -320,6 +298,12 @@ class HospitalDataLoader:
         """获取科室详细信息"""
         if not self.hospital_data:
             self.load_data()
+
+        from .department_recommender import DepartmentRecommender
+
+        resolved_name = DepartmentRecommender(self).resolve_department_name(department_name)
+        if resolved_name:
+            department_name = resolved_name
 
         for dept_category in self.hospital_data["departments"]:
             if "sub_departments" in dept_category:

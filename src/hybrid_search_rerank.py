@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 混合检索 + Rerank模块
-Faiss向量检索 + 关键词匹配 + Rerank精排
+Faiss向量检索 + BM25关键词匹配 + Rerank精排
 """
 import os
 os.environ["USE_TORCH"] = "1"
@@ -32,7 +32,8 @@ class HybridSearchRerank:
         self.metadata = []
         self.model = None
         self._initialized = False
-        self.keywords_index = {}
+        self.bm25 = None
+        self.tokenized_corpus = []
 
     def initialize(self):
         """初始化嵌入模型"""
@@ -76,8 +77,8 @@ class HybridSearchRerank:
 
             self.initialize()
 
-            print("构建关键词索引...")
-            self._build_keywords_index()
+            print("构建BM25索引...")
+            self._build_bm25_index()
 
             return True
 
@@ -85,8 +86,38 @@ class HybridSearchRerank:
             print(f"[X] 加载索引失败: {e}")
             return False
 
-    def _build_keywords_index(self):
-        """构建关键词倒排索引"""
+    def _build_bm25_index(self):
+        """构建BM25索引"""
+        try:
+            from rank_bm25 import BM25Okapi
+        except ImportError:
+            print("[!] rank_bm25未安装，使用简单关键词匹配作为备选")
+            self._build_simple_keywords_index()
+            return
+
+        self.tokenized_corpus = []
+        for meta in self.metadata:
+            text = f"{meta.get('book', '')} {meta.get('h1', '')} {meta.get('h2', '')} {meta.get('h3', '')} {meta.get('h4', '')}"
+            tokens = self._tokenize_chinese(text)
+            self.tokenized_corpus.append(tokens)
+
+        self.bm25 = BM25Okapi(self.tokenized_corpus)
+        print(f"[V] BM25索引构建完成，包含 {len(self.tokenized_corpus)} 条文档")
+
+    def _tokenize_chinese(self, text: str) -> List[str]:
+        """中文分词（简单二元组分词）"""
+        chinese_words = re.findall(r'[\u4e00-\u9fa5]+', text.lower())
+        tokens = []
+        for word in chinese_words:
+            if len(word) >= 2:
+                tokens.append(word)
+                for i in range(len(word) - 1):
+                    tokens.append(word[i:i+2])
+        return tokens
+
+    def _build_simple_keywords_index(self):
+        """备选：简单关键词倒排索引"""
+        self.keywords_index = {}
         for idx, meta in enumerate(self.metadata):
             book = meta.get('book', '')
             h1 = meta.get('h1', '')
@@ -110,10 +141,20 @@ class HybridSearchRerank:
                     self.keywords_index[keyword] = []
                 self.keywords_index[keyword].append(idx)
 
-        print(f"[V] 关键词索引构建完成，包含 {len(self.keywords_index)} 个关键词")
+        print(f"[V] 简单关键词索引构建完成，包含 {len(self.keywords_index)} 个关键词")
 
-    def _keyword_search(self, query: str, top_k: int = 20) -> List[Tuple[int, float]]:
-        """关键词搜索"""
+    def _bm25_search(self, query: str, top_k: int = 20) -> List[Tuple[int, float]]:
+        """BM25关键词搜索"""
+        if self.bm25 is not None:
+            tokens = self._tokenize_chinese(query.lower())
+            scores = self.bm25.get_scores(tokens)
+            top_indices = np.argsort(scores)[::-1][:top_k]
+            return [(int(idx), float(scores[idx])) for idx in top_indices if scores[idx] > 0]
+        else:
+            return self._keyword_search_simple(query, top_k)
+
+    def _keyword_search_simple(self, query: str, top_k: int = 20) -> List[Tuple[int, float]]:
+        """备选：简单关键词搜索"""
         query_keywords = set()
         chinese_words = re.findall(r'[\u4e00-\u9fa5]+', query.lower())
 
@@ -164,14 +205,14 @@ class HybridSearchRerank:
             [(doc_idx, score, source), ...]
         """
         semantic_results = self._semantic_search(query, top_k * 2)
-        keyword_results = self._keyword_search(query, top_k * 2)
+        bm25_results = self._bm25_search(query, top_k * 2)
 
         combined_scores = {}
 
         for idx, score in semantic_results:
             combined_scores[idx] = combined_scores.get(idx, 0) + score * semantic_weight
 
-        for idx, score in keyword_results:
+        for idx, score in bm25_results:
             combined_scores[idx] = combined_scores.get(idx, 0) + score * keyword_weight
 
         sorted_results = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)

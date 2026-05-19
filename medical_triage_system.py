@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.symptom_clarifier import create_clarifier
 from src.rag_engine import create_optimized_rag_engine
+from src.triage_agent import MedicalTriageAgent, TriageResult, UrgencyLevel
 
 
 class MedicalTriageSystem:
@@ -24,6 +25,7 @@ class MedicalTriageSystem:
     def __init__(self):
         self.clarifier = None
         self.rag_engine = None
+        self.triage_agent = None
         self._initialized = False
 
     def initialize(self) -> bool:
@@ -33,17 +35,21 @@ class MedicalTriageSystem:
         print("=" * 70)
 
         try:
-            print("\n[1/2] 初始化症状追问系统...")
+            print("\n[1/3] 初始化症状追问系统...")
             self.clarifier = create_clarifier(max_rounds=5)
             print("[V] 症状追问系统就绪")
 
-            print("\n[2/2] 初始化RAG引擎（混合检索 + Rerank）...")
+            print("\n[2/3] 初始化RAG引擎（混合检索 + Rerank）...")
             self.rag_engine = create_optimized_rag_engine()
             print("[V] RAG引擎就绪（已优化）")
 
+            print("\n[3/3] 初始化分诊Agent...")
+            self.triage_agent = MedicalTriageAgent(rag_engine=self.rag_engine)
+            print("[V] 分诊Agent就绪")
+
             self._initialized = True
             print("\n" + "=" * 70)
-            print("✅ 医学分诊系统初始化完成！")
+            print("█ 医学分诊系统初始化完成！")
             print("=" * 70)
 
             return True
@@ -109,41 +115,42 @@ class MedicalTriageSystem:
 
         clarified_symptom = self.clarifier.get_clarified_symptom()
 
-        triage_result = self.rag_engine.triage(clarified_symptom, k=5)
+        result = self.triage_agent.triage(clarified_symptom)
 
         print("\n" + "=" * 70)
         print("📋 分诊建议")
         print("=" * 70)
 
-        if triage_result.get("success"):
-            urgency = triage_result.get("urgency_level", {})
-            urgency_text = urgency.get("name", "未知")
-            urgency_color = urgency.get("color", "white")
+        color_emoji = {
+            "red": "🔴",
+            "orange": "🟠",
+            "yellow": "🟡",
+            "green": "🟢"
+        }
 
-            color_emoji = {
-                "red": "🔴",
-                "orange": "🟠",
-                "yellow": "🟡",
-                "green": "🟢"
-            }
+        emoji = color_emoji.get(result.urgency_color, "⚪")
 
-            emoji = color_emoji.get(urgency_color, "⚪")
+        print(f"\n{emoji} 紧急程度：{result.urgency_name}（{result.urgency_description}）\n")
+        print("-" * 70)
+        print("\n【分析推理】\n")
+        print(result.reasoning)
 
-            print(f"\n{emoji} 紧急程度：{urgency_text}\n")
-            print("-" * 70)
-            print("\n【分析结果】\n")
-            print(triage_result["analysis"])
+        print("\n" + "-" * 70)
+        print("\n【推荐科室】\n")
+        print(f"🏥 {result.recommended_department}")
 
-            hospital_context = triage_result.get("hospital_context", "")
-            if hospital_context:
-                print("\n" + "-" * 70)
-                print("\n【本院就诊建议】\n")
-                print(hospital_context)
+        if result.recommended_doctors:
+            print(f"\n👨‍⚕️ 推荐医生：{', '.join(result.recommended_doctors)}")
 
-            print("\n" + "=" * 70)
-            print("💡 温馨提示")
-            print("=" * 70)
-            print("""
+        if result.advice:
+            print("\n" + "-" * 70)
+            print("\n【处理建议】\n")
+            print(result.advice)
+
+        print("\n" + "=" * 70)
+        print("💡 温馨提示")
+        print("=" * 70)
+        print("""
 以上建议仅供参考，不能替代专业医生的诊断。
 
 如有以下情况，请立即就医或拨打急救电话：
@@ -153,10 +160,7 @@ class MedicalTriageSystem:
 • 高热不退
 
 祝您早日康复！
-            """)
-
-        else:
-            print(f"\n[X] 分诊失败: {triage_result.get('error')}")
+        """)
 
         print("\n" + "=" * 70)
         print("感谢使用医学分诊系统！")

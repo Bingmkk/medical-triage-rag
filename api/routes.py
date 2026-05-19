@@ -12,17 +12,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.rag_engine import RAGEngine, create_optimized_rag_engine, TRIAGE_PROMPT_TEMPLATE, TRIAGE_PROMPT_NO_KG
 from src.symptom_clarifier import SymptomClarifier
 from src.hospital_loader import HospitalDataLoader
+from src.smart_referral import SmartReferralTool
+from src.department_recommender import enrich_departments_with_referral
 import traceback
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
 optimized_rag_engine = None
 hospital_loader = None
+smart_referral_tool = None
 
 
 def initialize_agents():
     """初始化Agent"""
-    global optimized_rag_engine, hospital_loader
+    global optimized_rag_engine, hospital_loader, smart_referral_tool
 
     if optimized_rag_engine is None:
         print("=" * 60)
@@ -45,9 +48,40 @@ def initialize_agents():
             print(f"✗ 医院数据加载器初始化失败: {e}")
             hospital_loader = None
 
+        try:
+            smart_referral_tool = SmartReferralTool(hospital_loader)
+            print("✓ 智能分流工具已初始化")
+        except Exception as e:
+            print(f"✗ 智能分流工具初始化失败: {e}")
+            smart_referral_tool = None
+
         print("=" * 60)
         print("Agent初始化完成！")
         print("=" * 60)
+
+
+def _build_department_recommendations(
+    symptom_description: str,
+    analysis: str = "",
+    urgency_level: int = 4,
+    limit: int = 5,
+):
+    """统一构建科室推荐列表（含智能分流）"""
+    if not hospital_loader:
+        return [], None
+
+    departments = hospital_loader.recommend_departments(
+        symptom_text=symptom_description,
+        analysis=analysis,
+        urgency_level=urgency_level,
+        limit=limit,
+    )
+
+    if smart_referral_tool:
+        return enrich_departments_with_referral(
+            symptom_description, departments, smart_referral_tool
+        )
+    return departments, None
 
 
 @api_bp.route('/health', methods=['GET'])
@@ -96,9 +130,16 @@ def _triage_stream(symptom_description: str, k: int = 5) -> Generator[str, None,
 
         urgency_level = optimized_rag_engine._extract_urgency_level(full_answer)
 
-        recommended_departments_detail = []
-        if hospital_loader:
-            recommended_departments_detail = hospital_loader.get_department_by_symptom(symptom_description)[:5]
+        recommended_departments_detail, smart_referral_result = _build_department_recommendations(
+            symptom_description=symptom_description,
+            analysis=full_answer,
+            urgency_level=urgency_level["level"],
+        )
+        primary_department = (
+            recommended_departments_detail[0]["name"]
+            if recommended_departments_detail
+            else None
+        )
 
         yield "data: " + json.dumps({
             "type": "done",
@@ -106,8 +147,10 @@ def _triage_stream(symptom_description: str, k: int = 5) -> Generator[str, None,
             "urgency_level": urgency_level["level"],
             "urgency_name": urgency_level["name"],
             "urgency_color": urgency_level["color"],
+            "primary_department": primary_department,
             "recommended_departments_detail": recommended_departments_detail,
-            "hospital_context": hospital_context
+            "hospital_context": hospital_context,
+            "smart_referral": smart_referral_result
         }, ensure_ascii=False) + "\n\n"
 
     except Exception as e:
@@ -233,9 +276,16 @@ def triage():
                 "error": result.get("error", "分诊失败")
             }), 500
 
-        recommended_departments_detail = []
-        if hospital_loader:
-            recommended_departments_detail = hospital_loader.get_department_by_symptom(symptom_description)
+        recommended_departments_detail, smart_referral_result = _build_department_recommendations(
+            symptom_description=symptom_description,
+            analysis=result.get("analysis", ""),
+            urgency_level=result["urgency_level"]["level"],
+        )
+        primary_department = (
+            recommended_departments_detail[0]["name"]
+            if recommended_departments_detail
+            else None
+        )
 
         return jsonify({
             "success": True,
@@ -245,9 +295,11 @@ def triage():
                 "urgency_level": result["urgency_level"]["level"],
                 "urgency_name": result["urgency_level"]["name"],
                 "urgency_color": result["urgency_level"]["color"],
-                "recommended_departments_detail": recommended_departments_detail[:5],
+                "primary_department": primary_department,
+                "recommended_departments_detail": recommended_departments_detail,
                 "hospital_context": result.get("hospital_context", ""),
-                "context": result.get("context", "")
+                "context": result.get("context", ""),
+                "smart_referral": smart_referral_result
             }
         })
 
@@ -289,7 +341,12 @@ def batch_triage():
             if result.get("success"):
                 recommended_departments_detail = []
                 if hospital_loader:
-                    recommended_departments_detail = hospital_loader.get_department_by_symptom(symptom)
+                    recommended_departments_detail = hospital_loader.recommend_departments(
+                        symptom_text=symptom,
+                        analysis=result.get("analysis", ""),
+                        urgency_level=result["urgency_level"]["level"],
+                        limit=5,
+                    )
 
                 results.append({
                     "symptom_description": result["symptom_description"],
@@ -565,6 +622,41 @@ def get_hospital_info():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@api_bp.route('/department/recommend', methods=['POST'])
+def recommend_department():
+    """科室推荐接口（结合症状与可选分诊分析）"""
+    try:
+        data = request.get_json() or {}
+        symptom = data.get("symptom") or data.get("symptom_description", "")
+        analysis = data.get("analysis", "")
+        urgency_level = int(data.get("urgency_level", 4))
+
+        if not symptom or not str(symptom).strip():
+            return jsonify({"success": False, "error": "缺少症状描述"}), 400
+
+        initialize_agents()
+
+        if not hospital_loader:
+            return jsonify({"success": False, "error": "医院数据未初始化"}), 500
+
+        departments, smart_referral_result = _build_department_recommendations(
+            symptom_description=symptom,
+            analysis=analysis,
+            urgency_level=urgency_level,
+        )
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "symptom": symptom,
+                "departments": departments,
+                "smart_referral": smart_referral_result,
+            },
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @api_bp.route('/departments', methods=['GET'])
 def get_departments():
     """获取科室列表"""
@@ -577,7 +669,14 @@ def get_departments():
         symptom = request.args.get('symptom', '')
 
         if symptom:
-            recommendations = hospital_loader.get_department_by_symptom(symptom)
+            analysis = request.args.get("analysis", "")
+            urgency_level = int(request.args.get("urgency_level", 4))
+            recommendations = hospital_loader.recommend_departments(
+                symptom_text=symptom,
+                analysis=analysis,
+                urgency_level=urgency_level,
+                limit=5,
+            )
             return jsonify({
                 "success": True,
                 "data": {
